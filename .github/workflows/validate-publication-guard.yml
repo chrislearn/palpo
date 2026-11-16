@@ -1,0 +1,52 @@
+name: Validate publication guard syntax
+
+on:
+  push:
+    branches: [ci/validate-publication-guard-20261117]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    if: github.repository == 'chrislearn/palpo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        repository: [fake-registry-one, fake-registry-two]
+    concurrency:
+      group: image-publication-${{ github.ref }}-${{ matrix.repository }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify exact reviewed source blobs
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          source = 'f3a79a06042b8b976d21d03e954e84389b006682'
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('rev-parse', 'HEAD^') == source
+          paths = [
+              '.github/scripts/check-publish-ref.py',
+              '.github/scripts/test_check_publish_ref.py',
+              '.github/workflows/quality-control.yml',
+              '.github/workflows/release-docker-images.yml',
+          ]
+          blobs = {}
+          for path in paths:
+              expected = git('rev-parse', source + ':' + path)
+              actual = git('rev-parse', 'HEAD:' + path)
+              assert actual == expected, path
+              blobs[path] = actual
+          print(json.dumps({'reviewed_source': source, 'source_blobs': blobs}, sort_keys=True))
+          PY
+      - name: Run publication guard mock regressions
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts -p 'test_check_publish_ref.py' -v
